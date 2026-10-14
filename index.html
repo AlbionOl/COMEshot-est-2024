@@ -25,7 +25,7 @@ nav{height:76px;display:flex;align-items:center;justify-content:space-between;bo
 .refresh-btn{background:#21191e;color:#fff;border:1px solid var(--line);border-radius:5px;padding:9px 12px;font:inherit;font-weight:800;cursor:pointer}
 .kill-tools{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:26px 0 14px;color:var(--muted);font-size:.82rem}
 .kill-tools a{margin-left:auto;color:var(--gold);text-decoration:none}
-.kill-list{display:grid;gap:10px}
+.external-killboard{position:relative;margin-top:22px;background:#100d10;border:1px solid var(--line);border-radius:8px;overflow:hidden;min-height:780px}.external-killboard iframe{display:block;width:100%;height:780px;border:0;background:#100d10}.embed-fallback{padding:16px;color:var(--muted);font-size:.9rem}.embed-fallback a{display:inline-block;margin-left:8px;color:var(--gold);font-weight:800}@media(max-width:640px){.external-killboard,.external-killboard iframe{min-height:680px;height:680px}}\n.kill-list{display:grid;gap:10px}
 .kill-item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:center;padding:17px 20px;background:#151116;border:1px solid var(--line);border-left:3px solid var(--red);border-radius:6px}
 .kill-match{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-weight:850;overflow-wrap:anywhere}
 .kill-victim{color:#ff9295}.kill-arrow{color:var(--gold)}.kill-meta{display:flex;gap:12px;flex-wrap:wrap;color:var(--muted);font-size:.82rem;margin-top:7px}
@@ -48,12 +48,27 @@ nav{height:76px;display:flex;align-items:center;justify-content:space-between;bo
 <section class="section killboard" id="killboard">
   <div class="wrap">
     <div class="kill-head">
-      <div><div class="eyebrow">Asia server • Community event feed</div><h2>COMEshot <span>KILLBOARD</span></h2><p>Recent kills and deaths involving COMEshot, refreshed automatically.</p></div>
-      <div class="kill-status"><span class="live-dot"></span><span id="kill-status" role="status">Connecting to Albion…</span><button class="refresh-btn" id="kill-refresh" type="button">↻ Refresh</button></div>
+      <div><div class="eyebrow">Asia server • Community killboard</div><h2>COMEshot <span>KILLBOARD</span></h2><p>Guild stats, recent kills, deaths, and activity powered by KillBoard#1.</p></div>
+      <div class="kill-status"><span class="live-dot"></span><span>External killboard</span></div>
     </div>
-    <div class="kill-tools"><span class="tag">ASIA / EAST</span><span class="kill-note" id="kill-updated">Waiting for first update</span><a href="https://discord.gg/VCVSjNM8n" target="_blank" rel="noopener noreferrer">Report a kill / Join Discord ↗</a></div>
-    <div id="kill-list" class="kill-list"><div class="kill-empty">Loading recent Albion Online events…</div></div>
-    <p class="kill-disclaimer">Kill data comes from Albion Online’s community-facing Gameinfo API. Events may appear with a delay, and the API may occasionally be unavailable. This is a live recent feed, not a permanent archive.</p>
+    <div class="kill-tools">
+      <span class="tag">ASIA / EAST</span>
+      <a href="https://killboard-1.com/as/guild/COMESHOT" target="_blank" rel="noopener noreferrer">Open full killboard ↗</a>
+    </div>
+    <div class="external-killboard">
+      <iframe
+        src="https://killboard-1.com/as/guild/COMESHOT"
+        title="COMEshot Asia guild killboard on KillBoard#1"
+        loading="lazy"
+        referrerpolicy="strict-origin-when-cross-origin"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+      ></iframe>
+      <div class="embed-fallback">
+        If the killboard does not appear here, the provider may block website embedding.
+        <a href="https://killboard-1.com/as/guild/COMESHOT" target="_blank" rel="noopener noreferrer">View COMEshot Killboard directly ↗</a>
+      </div>
+    </div>
+    <p class="kill-disclaimer">This panel loads from KillBoard#1. If its security settings prevent embedding, use the direct link above. The stats and event availability are controlled by the external service.</p>
   </div>
 </section>
 
@@ -69,7 +84,8 @@ nav{height:76px;display:flex;align-items:center;justify-content:space-between;bo
   const status = document.getElementById("kill-status");
   const updated = document.getElementById("kill-updated");
   const refresh = document.getElementById("kill-refresh");
-  let guildId = null, busy = false, lastIds = new Set();
+  const filter = document.getElementById("kill-filter");
+  let busy = false, lastIds = new Set(), cachedEvents = [];
 
   const esc = value => String(value ?? "Unknown").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
   const num = value => Number(value || 0).toLocaleString();
@@ -87,32 +103,18 @@ nav{height:76px;display:flex;align-items:center;justify-content:space-between;bo
     if (!res.ok) throw new Error("Albion API returned HTTP " + res.status);
     return res.json();
   }
-  function findGuild(data) {
-    const arr = Array.isArray(data) ? data : [...(data?.guilds || data?.Guilds || []), ...(data?.results || data?.Results || [])];
-    return arr.find(x => String(x?.Name || x?.name || x?.GuildName || "").toLowerCase() === GUILD_NAME.toLowerCase()
-      && (x?.Id || x?.id || x?.GuildId || x?.guildId));
-  }
-  async function resolveGuild() {
-    if (guildId) return guildId;
-    const data = await getJson(API + "/search?q=" + encodeURIComponent(GUILD_NAME));
-    const guild = findGuild(data);
-    if (!guild) throw new Error("Could not find the COMEshot guild on the Asia server. Check the exact in-game guild name.");
-    guildId = guild.Id || guild.id || guild.GuildId || guild.guildId;
-    return guildId;
+  function hasGuild(e) {
+    const k = e.Killer || {}, v = e.Victim || {};
+    const match = p => String(p.GuildName || "").toLowerCase() === GUILD_NAME.toLowerCase();
+    return match(k) || match(v);
   }
   function render(events) {
-    const guildEvents = (events || []).filter(e => {
-      const k = e.Killer || {}, v = e.Victim || {};
-      return String(k.GuildId || k.GuildID || "") === String(guildId)
-        || String(v.GuildId || v.GuildID || "") === String(guildId)
-        || String(k.GuildName || "").toLowerCase() === GUILD_NAME.toLowerCase()
-        || String(v.GuildName || "").toLowerCase() === GUILD_NAME.toLowerCase();
-    }).sort((a,b) => new Date(b.TimeStamp || b.Timestamp || 0) - new Date(a.TimeStamp || a.Timestamp || 0));
-    if (!guildEvents.length) {
-      list.innerHTML = '<div class="kill-empty">No recent COMEshot events were found in the latest API results. This does not necessarily mean the guild has no recent kills.</div>';
+    const shown = filter.value === "guild" ? events.filter(hasGuild) : events;
+    if (!shown.length) {
+      list.innerHTML = '<div class="kill-empty">' + (filter.value === "guild" ? 'No COMEshot-related events were found in the recent events returned by the API.' : 'No recent events were returned by the API.') + '</div>';
       return;
     }
-    list.innerHTML = guildEvents.slice(0,20).map(e => {
+    list.innerHTML = shown.map(e => {
       const killer = e.Killer || {}, victim = e.Victim || {};
       const time = e.TimeStamp || e.Timestamp || "";
       const fame = e.TotalVictimKillFame || e.VictimKillFame || 0;
@@ -121,24 +123,35 @@ nav{height:76px;display:flex;align-items:center;justify-content:space-between;bo
       const changed = id && !lastIds.has(String(id));
       return '<article class="kill-item"><div><div class="kill-match"><span>' + esc(killer.Name || "Unknown killer") + '</span><span class="kill-arrow">➜</span><span class="kill-victim">' + esc(victim.Name || "Unknown victim") + '</span>' + (changed ? '<span class="tag">NEW</span>' : '') + '</div><div class="kill-meta"><span>⚔ ' + esc(killer.GuildName || "No guild") + ' vs ' + esc(victim.GuildName || "No guild") + '</span><span>⌖ ' + esc(e.Location || "Unknown zone") + '</span><span>' + esc(ago(time)) + '</span><a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">View event ↗</a></div></div><div class="kill-fame">' + num(fame) + '<small>KILL FAME</small></div></article>';
     }).join("");
-    lastIds = new Set(guildEvents.map(e => String(e.EventId || e.EventID || e.id)));
   }
   async function load() {
     if (busy) return;
     busy = true; refresh.disabled = true; status.textContent = "Refreshing…";
     try {
-      const id = await resolveGuild();
-      const events = await getJson(API + "/events?limit=51&offset=0&guildId=" + encodeURIComponent(id));
-      render(events);
-      status.textContent = "Connected • Asia";
+      // Request the public recent-events feed, not a single guild's event endpoint.
+      // Pagination is bounded to avoid excessive requests to the community API.
+      const pageSize = 51, maxPages = 5;
+      const pages = await Promise.all(Array.from({length:maxPages}, (_, page) =>
+        getJson(API + "/events?limit=" + pageSize + "&offset=" + (page * pageSize) + "&sort=recent")
+      ));
+      const byId = new Map();
+      pages.flat().forEach(event => {
+        const eventId = event.EventId || event.EventID || event.id;
+        if (eventId != null) byId.set(String(eventId), event);
+      });
+      cachedEvents = [...byId.values()].sort((a,b) => new Date(b.TimeStamp || b.Timestamp || 0) - new Date(a.TimeStamp || a.Timestamp || 0));
+      render(cachedEvents);
+      status.textContent = "Connected • Asia • " + cachedEvents.length + " recent events";
       updated.textContent = "Last checked " + new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"});
+      lastIds = new Set(cachedEvents.map(e => String(e.EventId || e.EventID || e.id)));
     } catch (err) {
       status.textContent = "Feed unavailable";
-      list.innerHTML = '<div class="kill-empty">' + esc(err.message || "Could not load the kill feed.") + ' <br>Open the guild killboard later, or try Refresh.</div>';
+      list.innerHTML = '<div class="kill-empty">' + esc(err.message || "Could not load the kill feed.") + ' <br>The public API may be unavailable or may block browser requests. Try Refresh later.</div>';
       updated.textContent = "Could not update";
     } finally { busy = false; refresh.disabled = false; }
   }
   refresh.addEventListener("click", load);
+  filter.addEventListener("change", () => render(cachedEvents));
   load();
   window.setInterval(load, 60000);
 })();
